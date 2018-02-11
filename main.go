@@ -1,0 +1,327 @@
+package main
+
+// TODO
+// - Save PID and reload status data if PID changes?
+// - If not have prior run time/restart, use uptime for elapsed time; always use uptime?
+
+// Later - option to not to delta processing in tool, just return counts
+
+import (
+	"fmt"
+	flag "github.com/ogier/pflag"
+	"log"
+	"os"
+	"time"
+	"os/exec"
+	"strconv"
+	"strings"
+)
+
+// constants
+const (
+	version   = "0.1"
+	copyright = "Copyright 2018 by OpsStack"
+)
+
+// Global vars
+var (
+	argProcessName    string
+	argProcessorName  string
+	argServerServer   string
+	argServerPort     string
+	argServerUser     string
+	argServerPassword string
+	argStatsMetric    string
+	argStatusFileName string
+	argCredFileName   string
+	flagBeginning     bool
+	flagVerbose       bool
+	flagHelp          bool
+)
+
+// init is called automatically at start
+func init() {
+
+	// Setup arguments, must do before calling Parse()
+	flag.StringVarP(&argProcessName, "process", "p", "", "Process Name")
+	flag.StringVarP(&argProcessorName, "processor", "r", "", "Request Processor Name")
+	flag.StringVarP(&argServerServer, "server", "S", "127.0.0.1", "Server Host")
+	flag.StringVarP(&argServerPort, "port", "P", "3306", "Server Port")
+	flag.StringVarP(&argServerUser, "user", "u", "", "User")
+	flag.StringVarP(&argServerPassword, "password", "w", "", "Password")
+	flag.StringVarP(&argStatsMetric, "metric", "m", "c", "Metric Type")
+	flag.StringVarP(&argStatusFileName, "statusfile", "f", "", "Status File")
+	flag.StringVarP(&argCredFileName, "credfile", "c", "", "Credential File")
+	flag.BoolVarP(&flagBeginning, "beginning", "b", false, "From Beginning")
+	flag.BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose Output")
+	//flag.BoolVarP(&flagVeryVerbose, "very-verbose", "w", false, "Very Verbose Output")
+	flag.BoolVarP(&flagHelp, "help", "h", false, "Help")
+
+	flag.Parse() // Process argurments
+}
+
+func main() {
+
+	var (
+		err            error
+		infoFileName   string
+		lastRunInfo    [8]int
+		jmxResults     [5]int
+		jmxTime        int
+		jmxTimeElapsed int
+		latency        int
+		pid            int
+	)
+
+	startTime := time.Now()
+
+	if flagVerbose {
+		fmt.Println("")
+		fmt.Printf("Tomcat Signals Version %s - %s\n", version, copyright)
+		fmt.Printf("Starting at: %s \n", startTime.Format(time.UnixDate))
+		if argServerPassword == "" {
+			fmt.Printf("Arguments: %s \n\n", os.Args[1:]) // Skip program name
+		} else {
+			fmt.Printf("Arguments: Can't show \n\n") // Now show if PW here
+		}
+	}
+
+	// Check our command-line arguments
+	argsCheck(version, copyright)
+
+	// Get our last run counters from status file
+	infoFileName = argStatusFileName // Need more safety checks before open argument filename?
+	lastRunInfo, err = getLastRunInfo(infoFileName)
+	checkErr(err)
+	// lastRunInfo:
+	//  0 - Tomcat PID on last run
+	//	1 - Request Count last run time (Rate mode)
+	//	2 - Request Count last counter value (Rate mode)
+	//	3 - Error Count last run time (Error mode)
+	//	4 - Error Count last counter value (Error mode)
+	//  5 - Processing Time last run time (Latency mode)
+	//	6 - Processing Time last time counter value (Latency mode)
+	//	7 - Processing Time last request counter value (Latency mode)
+
+	// Get our PID
+	pid = getTomcatPID(argProcessName)
+	if pid != lastRunInfo[0] {
+		// We have a new Tomcat
+		// Reset last run info to zero
+		if flagVerbose {
+			fmt.Printf("Tomcat has restarted, old PID: %d, new PID: %d\n", lastRunInfo[0], pid)
+		}
+		lastRunInfo[0] = pid
+		// Set all data to zero, except first element which is PID
+		for i := 1; i < 8; i++ {
+			lastRunInfo[i] = 0
+		}
+	} else {
+		if flagVerbose {
+			if !flagBeginning {
+				fmt.Printf("Tomcat still running, PID: %d, using last run status info.\n", lastRunInfo[0])
+			} else {
+				fmt.Printf("Tomcat still running, PID: %d, but have -b beginning flag, so not using last run status info.\n", lastRunInfo[0])
+			}
+		}
+	}
+
+	jmxResults, err = runJMX(pid)
+	checkErr(err)
+	// jmxReults[]:
+	// 0 - Request Count
+	// 1 - Error Count
+	// 2 - Processing Time (ms)
+	// 3 - Threads Busy
+	// 4 - Threads Max
+
+	jmxTime = int(time.Now().Unix()) // Get after JMX run as JMX takes several seconds
+
+	// Output
+	if flagVerbose {
+		fmt.Printf("Request   Count: %d\n", jmxResults[0])
+		fmt.Printf("Error     Count: %d\n", jmxResults[1])
+		fmt.Printf("Processing Time: %d\n", jmxResults[2])
+		fmt.Printf("Current Threads: %d\n", jmxResults[3])
+		fmt.Printf("Max     Threads: %d\n", jmxResults[4])
+	}
+
+	// Make calculations & display results
+	switch argStatsMetric {
+	case "r":
+		if !flagBeginning { // Don't use old stats, set to 0
+			lastRunInfo[1] = 0
+			lastRunInfo[2] = 0
+		}
+		jmxTimeElapsed = jmxTime - lastRunInfo[1]
+		newRequests := jmxResults[0] - lastRunInfo[2]
+		rate := float64(newRequests / jmxTimeElapsed)
+		// Update status info
+		lastRunInfo[1] = jmxTime
+		lastRunInfo[2] = jmxResults[0]
+
+		if flagVerbose {
+			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
+			fmt.Printf("Rate: %f/sec\n", rate)
+		} else {
+			fmt.Printf("%f", rate)
+		}
+
+	case "e":
+		if !flagBeginning { // Don't use old stats, set to 0
+			lastRunInfo[3] = 0
+			lastRunInfo[4] = 0
+		}
+		jmxTimeElapsed = jmxTime - lastRunInfo[3]
+		newErrors := jmxResults[1] - lastRunInfo[4]
+		rate := float64(newErrors / jmxTimeElapsed)
+		// Update status info
+		lastRunInfo[3] = jmxTime
+		lastRunInfo[4] = jmxResults[1]
+
+		if flagVerbose {
+			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
+			fmt.Printf("Error Rate: %f/sec\n", rate)
+		} else {
+			fmt.Printf("%f", rate)
+		}
+
+	case "l": // Note this includes errors (as it's a Request count)
+		if !flagBeginning { // Don't use old stats, set to 0
+			lastRunInfo[7] = 0
+			lastRunInfo[6] = 0
+		}
+		newRequests := jmxResults[0] - lastRunInfo[7]
+		newProcTime := jmxResults[2] - lastRunInfo[6]
+		if newRequests > 0 {
+			latency = int(newProcTime / newRequests)
+		} else {
+			latency = 0.0
+		}
+		// Update status info
+		lastRunInfo[7] = jmxResults[0]
+		lastRunInfo[6] = jmxResults[2]
+
+		if flagVerbose {
+			fmt.Printf("New Requests: %d ms\n", newRequests)
+			fmt.Printf("New Procsssing Time: %d ms\n", newProcTime)
+			fmt.Printf("Latency: %d ms\n", latency)
+		} else {
+			fmt.Printf("%d", latency)
+		}
+
+	case "u":                                                       // Does not use saved status info
+		utilization := float64(jmxResults[3] / jmxResults[4] * 100) // Get %
+
+		if flagVerbose {
+			fmt.Printf("Utilization: %4.1f%%\n", utilization)
+		} else {
+			fmt.Printf("%f", utilization)
+		}
+
+	default:
+		panic("Invdalid Stats Metric in Calc/Ouput Section")
+	} // Switch on argStatsMetric
+
+	// Save data back to status file
+	err = saveLastRunInfo(infoFileName, lastRunInfo)
+	checkErr(err)
+
+	// Exit normally
+	os.Exit(0)
+} // Main
+
+// Process arguments
+func argsCheck(version string, copyright string) {
+
+	// Tomcat 7
+	//n := "tomcat"
+	//p := "http-bio-8080"
+
+	//// Tomcat 8.0 & 8.5
+	//n := "tomcat"
+	//p := "http-nio-8080"
+
+	//// Tomcat 8.5
+	//n := "tomcat"
+	//p := "http-nio-8080"
+
+	//// Tomcat 9
+	//n := "catalina"
+	//p := "http-nio-8080"
+
+	if argProcessName == "" {
+		argProcessName = "catalina" // For Tomcat
+	}
+
+	if argProcessorName == "" {
+		argProcessorName = "http-nio-8080" // For Tomcat 9, maybe others
+	}
+
+	if flagHelp {
+		fmt.Printf("GoldenWebReader Version %s - %s\n\n", version, copyright)
+		fmt.Printf("Usage: %s [options]\n\n", os.Args[0])
+		fmt.Println("Options:")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// Require metric type
+	if argStatsMetric != "r" && argStatsMetric != "e" &&
+		argStatsMetric != "l" && argStatsMetric != "u" {
+		log.Fatalln("Stats Metric not valid - should be r, e, l, or u")
+		os.Exit(1)
+	}
+
+	// Can have cred file OR user/password
+	if argCredFileName != "" && (argServerUser != "" || argServerPassword != "") {
+		log.Fatalln("Cannot supply BOTH a credential file and a user or password.")
+		os.Exit(1)
+	}
+}
+
+// Error checking for various things
+func checkErr(e error) {
+	if e != nil {
+		log.Fatal(e)
+		panic(e)
+	}
+}
+
+func getTomcatPID(name string) (int) {
+
+	var (
+		pid int
+	)
+
+	// If a process, get the PID
+	if argProcessName != "" {
+
+		if flagVerbose {
+			fmt.Printf("Getting PID for Process: %s\n", name)
+		}
+
+		// Realy need to check/safe this argument going to the OS
+		v := "pgrep -i -f " + name
+		cmd := exec.Command("sh", "-c", v)
+		stdoutStderr, err := cmd.CombinedOutput()
+		if err == nil {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(stdoutStderr))) //Remove trailing newline char (\n)
+		} else {
+			fmt.Println("error!")
+			log.Fatal(err)
+		}
+		if pid == 0 {
+			fmt.Printf("Cannot find PID for process: %s\n", name)
+			fmt.Println("- This usually means you have 0 or >1 running. pgrep -f must return only one PID.")
+			fmt.Println("- Exiting.")
+			os.Exit(1)
+		}
+		//fmt.Printf("PID: %s \n", string(stdoutStderr))
+		if flagVerbose {
+			fmt.Printf("PID for Process: %s is: %d\n", name, pid)
+		}
+	}
+
+	return pid
+} // getTomcatPID
