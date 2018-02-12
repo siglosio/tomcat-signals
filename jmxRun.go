@@ -60,7 +60,7 @@ func runJMX(pid int) ([6]int, error) {
 		"close\n" + "exit\n"
 
 	if flagVerbose {
-		fmt.Printf("Tomcat Request Processor: %s\n\n", argProcessorName)
+		fmt.Printf("Tomcat Request Processor Argument: %s\n\n", argProcessorName)
 		fmt.Println("JMXterm commands --------------")
 		fmt.Printf("%s", s)
 		fmt.Println("-------------------------------")
@@ -72,8 +72,7 @@ func runJMX(pid int) ([6]int, error) {
 
 	// Delete output file so no old stuff lying around
 	outputFile := "jmx.output"
-	err = os.Remove(outputFile)
-	checkErr(err)
+	os.Remove(outputFile) // Not checking output, don't care
 
 	// Build up command; have to use 'sh' to run due to arg issues
 	v := "java -jar jmxterm-1.0.0-uber.jar -n -e -i jmx.input -o jmx.output"

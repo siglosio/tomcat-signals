@@ -1,8 +1,6 @@
 package main
 
 // TODO
-// - If not have prior run time/restart, use uptime for elapsed time; always use uptime?
-
 // Later - option to not to delta processing in tool, just return counts
 
 import (
@@ -37,6 +35,7 @@ var (
 	flagBeginning     bool
 	flagVerbose       bool
 	flagHelp          bool
+	myPID			  int
 )
 
 // init is called automatically at start
@@ -67,22 +66,23 @@ func main() {
 		infoFileName   string
 		lastRunInfo    [8]int
 		jmxResults     [6]int
-		jmxTime        int
+		jmxUpTime      int
 		jmxTimeElapsed int
 		latency        int
 		pid            int
 	)
 
 	startTime := time.Now()
+	myPID = os.Getpid() // Needed for pgprep filtering
 
 	if flagVerbose {
-		fmt.Println("")
+		fmt.Println()
 		fmt.Printf("Tomcat Signals Version %s - %s\n", version, copyright)
-		fmt.Printf("Starting at: %s \n", startTime.Format(time.UnixDate))
+		fmt.Printf("Starting at: %s\n", startTime.Format(time.UnixDate))
 		if argServerPassword == "" {
-			fmt.Printf("Arguments: %s \n\n", os.Args[1:]) // Skip program name
+			fmt.Printf("Arguments: %s\n\n", os.Args[1:]) // Skip program name
 		} else {
-			fmt.Printf("Arguments include password, can't show \n\n") // Now show if PW here
+			fmt.Printf("Arguments include password, can't show.\n\n") // Now show if PW here
 		}
 	}
 
@@ -124,7 +124,7 @@ func main() {
 				fmt.Printf("Tomcat still running, PID: %d, but have -b beginning flag, so not using last run status info.\n", lastRunInfo[0])
 			}
 		}
-	} 
+	}
 
 	jmxResults, err = runJMX(pid)
 	checkErr(err)
@@ -136,7 +136,7 @@ func main() {
 	// 4 - Threads Busy
 	// 5 - Threads Max
 
-	jmxTime = int(time.Now().Unix()) // Get after JMX run as JMX takes several seconds
+	jmxUpTime = jmxResults[0] // int(time.Now().Unix()) // Get after JMX run as JMX takes several seconds
 
 	// Output
 	if flagVerbose {
@@ -151,15 +151,15 @@ func main() {
 	// Make calculations & display results
 	switch argStatsMetric {
 	case "r":
-		if !flagBeginning { // Don't use old stats, set to 0
+		if flagBeginning { // Don't use old stats, set to 0
 			lastRunInfo[1] = 0
 			lastRunInfo[2] = 0
 		}
-		jmxTimeElapsed = jmxTime - lastRunInfo[1]
+		jmxTimeElapsed = jmxUpTime - lastRunInfo[1]
 		newRequests := jmxResults[1] - lastRunInfo[2]
 		rate := float64(newRequests / jmxTimeElapsed)
 		// Update status info
-		lastRunInfo[1] = jmxTime
+		lastRunInfo[1] = jmxUpTime
 		lastRunInfo[2] = jmxResults[1]
 
 		if flagVerbose {
@@ -170,15 +170,15 @@ func main() {
 		}
 
 	case "e":
-		if !flagBeginning { // Don't use old stats, set to 0
+		if flagBeginning { // Don't use old stats, set to 0
 			lastRunInfo[3] = 0
 			lastRunInfo[4] = 0
 		}
-		jmxTimeElapsed = jmxTime - lastRunInfo[3]
+		jmxTimeElapsed = jmxUpTime - lastRunInfo[3]
 		newErrors := jmxResults[2] - lastRunInfo[4]
 		rate := float64(newErrors / jmxTimeElapsed)
 		// Update status info
-		lastRunInfo[3] = jmxTime
+		lastRunInfo[3] = jmxUpTime
 		lastRunInfo[4] = jmxResults[2]
 
 		if flagVerbose {
@@ -189,7 +189,7 @@ func main() {
 		}
 
 	case "l": // Note this includes errors (as it's a Request count)
-		if !flagBeginning { // Don't use old stats, set to 0
+		if flagBeginning { // Don't use old stats, set to 0
 			lastRunInfo[7] = 0
 			lastRunInfo[6] = 0
 		}
@@ -228,6 +228,14 @@ func main() {
 	// Save data back to status file
 	err = saveLastRunInfo(infoFileName, lastRunInfo)
 	checkErr(err)
+
+	endTime := time.Now()
+
+	if flagVerbose {
+		fmt.Println()
+		fmt.Printf("Ending at: %s\n", endTime.Format(time.UnixDate))
+		fmt.Println()
+	}
 
 	// Exit normally
 	os.Exit(0)
@@ -290,8 +298,8 @@ func checkErr(e error) {
 	}
 }
 
+// Get Tomcat's PID
 func getTomcatPID(name string) (int) {
-
 	var (
 		pid int
 	)
@@ -301,21 +309,44 @@ func getTomcatPID(name string) (int) {
 
 		if flagVerbose {
 			fmt.Printf("Getting PID for Process: %s\n", name)
+			fmt.Printf("Note my PID is: %d\n", myPID)
 		}
 
 		// Realy need to check/safe this argument going to the OS
-		v := "pgrep -i -f " + name
+		// Note -i is okay on Mac, but not on Linux for pgrep, so we are case SENSITIVE
+		v := "pgrep -f " + name
 		cmd := exec.Command("sh", "-c", v)
 		stdoutStderr, err := cmd.CombinedOutput()
+
 		//var ex exec.ExitError
 		if err == nil {
-			pid, err = strconv.Atoi(strings.TrimSpace(string(stdoutStderr))) //Remove trailing newline char (\n)
+			// Very messy but we have to filter out our own PID at runtime, then check for 0, 1, or more
+			pids := strings.Split(string(stdoutStderr), "\n")
+			pid = -1 // Not set, needed below so we know if it's been set, even to 0
+			for _, element := range pids {
+				if element != fmt.Sprintf("%d", myPID) &&
+					len(element) > 0 { // Not our PID
+					if pid == -1 { // PID not set yet, so set try to set it
+						pid, err = strconv.Atoi(strings.TrimSpace(string(element))) //Remove trailing newline char (\n)
+					} else {
+						// PID Already set, so we have > 1 PID here that's not us
+						pid = 0 // Set 0 so logic below sees this and gives error to use; may clean up logic later
+					}
+				}
+			}
 			if pid == 0 { // If we got here and have PID = 0, then we got multiple matches
 				fmt.Printf("Found several PIDs for process: %s\n", name)
 				fmt.Println("- This means you have >1 running. pgrep -f must return only one PID.")
+				fmt.Printf("pgrep returned:\n%s\n", string(stdoutStderr))
 				fmt.Println("- Exiting.")
 				os.Exit(1)
-			}
+			} else {
+				// Sames as below if pgrep returns nothing; we get here because pgrep returned only us
+				fmt.Printf("Cannot find PID for process: %s; seems not running or name is wrong\n", name)
+				fmt.Println("- pgrep return code = 1")
+				fmt.Println("- Exiting.")
+				os.Exit(1)
+				}
 			if flagVerbose {
 				fmt.Printf("PID for Process: %s is: %d\n", name, pid)
 			}
@@ -325,7 +356,7 @@ func getTomcatPID(name string) (int) {
 				ws := exiterr.Sys().(syscall.WaitStatus)
 				exitCode := ws.ExitStatus()
 				if exitCode == 1 {
-					fmt.Printf("Cannot find PID for process: %s; seems not running or name wrong\n", name)
+					fmt.Printf("Cannot find PID for process: %s; seems not running or name is wrong\n", name)
 					fmt.Println("- pgrep return code = 1")
 					fmt.Println("- Exiting.")
 					os.Exit(1)
