@@ -1,14 +1,14 @@
 package main
 
 import (
-	"os/exec"
-	"log"
-	"fmt"
-	"strconv"
-	"io"
-	"os"
-	"strings"
 	"bufio"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 )
 
 //jmxterm <OPTIONS> - see end of this file
@@ -28,11 +28,14 @@ import (
 
 // Run JMX
 
-func runJMX(pid int) ([5]int, error) {
+func runJMX(pid int) ([6]int, error) {
 	var (
-		vals [5]int
-		//var out bytes.Buffer
+		vals [6]int
 	)
+
+	// JVM info
+	jmxBeanRuntime := "bean java.lang:type=Runtime\n"
+	jmxCommandRunTime := "get Uptime\n"
 
 	// Request Count
 	jmxBeanReq := "bean Catalina:name=\"" + argProcessorName + "\",type=GlobalRequestProcessor\n"
@@ -51,9 +54,17 @@ func runJMX(pid int) ([5]int, error) {
 	// JMX tool commands, one per line
 	s := "close\n" +
 		"open " + fmt.Sprintf("%d\n", pid) +
+		jmxBeanRuntime + jmxCommandRunTime +
 		jmxBeanReq + jmxCommandReq + jmxCommandErr + jmxCommandTime +
 		jmxBeanPool + jmxCommandThdCur + jmxCommandThdMax +
 		"close\n" + "exit\n"
+
+	if flagVerbose {
+		fmt.Printf("Tomcat Request Processor: %s\n\n", argProcessorName)
+		fmt.Println("JMXterm commands --------------")
+		fmt.Printf("%s", s)
+		fmt.Println("-------------------------------")
+	}
 
 	_, err = io.WriteString(fw, s)
 	checkErr(err)

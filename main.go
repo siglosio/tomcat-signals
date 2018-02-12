@@ -1,7 +1,6 @@
 package main
 
 // TODO
-// - Save PID and reload status data if PID changes?
 // - If not have prior run time/restart, use uptime for elapsed time; always use uptime?
 
 // Later - option to not to delta processing in tool, just return counts
@@ -11,10 +10,11 @@ import (
 	flag "github.com/ogier/pflag"
 	"log"
 	"os"
-	"time"
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // constants
@@ -25,10 +25,10 @@ const (
 
 // Global vars
 var (
-	argProcessName    string
-	argProcessorName  string
-	argServerServer   string
-	argServerPort     string
+	argProcessName   string
+	argProcessorName string
+	//argServerServer   string
+	//argServerPort     string
 	argServerUser     string
 	argServerPassword string
 	argStatsMetric    string
@@ -45,10 +45,10 @@ func init() {
 	// Setup arguments, must do before calling Parse()
 	flag.StringVarP(&argProcessName, "process", "p", "", "Process Name")
 	flag.StringVarP(&argProcessorName, "processor", "r", "", "Request Processor Name")
-	flag.StringVarP(&argServerServer, "server", "S", "127.0.0.1", "Server Host")
-	flag.StringVarP(&argServerPort, "port", "P", "3306", "Server Port")
-	flag.StringVarP(&argServerUser, "user", "u", "", "User")
-	flag.StringVarP(&argServerPassword, "password", "w", "", "Password")
+	//flag.StringVarP(&argServerServer, "server", "S", "127.0.0.1", "Server Host")
+	//flag.StringVarP(&argServerPort, "port", "P", "3306", "Server Port")
+	//flag.StringVarP(&argServerUser, "user", "u", "", "User")
+	//flag.StringVarP(&argServerPassword, "password", "w", "", "Password")
 	flag.StringVarP(&argStatsMetric, "metric", "m", "c", "Metric Type")
 	flag.StringVarP(&argStatusFileName, "statusfile", "f", "", "Status File")
 	flag.StringVarP(&argCredFileName, "credfile", "c", "", "Credential File")
@@ -66,7 +66,7 @@ func main() {
 		err            error
 		infoFileName   string
 		lastRunInfo    [8]int
-		jmxResults     [5]int
+		jmxResults     [6]int
 		jmxTime        int
 		jmxTimeElapsed int
 		latency        int
@@ -82,7 +82,7 @@ func main() {
 		if argServerPassword == "" {
 			fmt.Printf("Arguments: %s \n\n", os.Args[1:]) // Skip program name
 		} else {
-			fmt.Printf("Arguments: Can't show \n\n") // Now show if PW here
+			fmt.Printf("Arguments include password, can't show \n\n") // Now show if PW here
 		}
 	}
 
@@ -103,10 +103,10 @@ func main() {
 	//	6 - Processing Time last time counter value (Latency mode)
 	//	7 - Processing Time last request counter value (Latency mode)
 
-	// Get our PID
+	// Get our Tomcat PID
 	pid = getTomcatPID(argProcessName)
 	if pid != lastRunInfo[0] {
-		// We have a new Tomcat
+		// We have a new Tomcat instance
 		// Reset last run info to zero
 		if flagVerbose {
 			fmt.Printf("Tomcat has restarted, old PID: %d, new PID: %d\n", lastRunInfo[0], pid)
@@ -124,26 +124,28 @@ func main() {
 				fmt.Printf("Tomcat still running, PID: %d, but have -b beginning flag, so not using last run status info.\n", lastRunInfo[0])
 			}
 		}
-	}
+	} 
 
 	jmxResults, err = runJMX(pid)
 	checkErr(err)
 	// jmxReults[]:
-	// 0 - Request Count
-	// 1 - Error Count
-	// 2 - Processing Time (ms)
-	// 3 - Threads Busy
-	// 4 - Threads Max
+	// 0 - Uptime
+	// 1 - Request Count
+	// 2 - Error Count
+	// 3 - Processing Time (ms)
+	// 4 - Threads Busy
+	// 5 - Threads Max
 
 	jmxTime = int(time.Now().Unix()) // Get after JMX run as JMX takes several seconds
 
 	// Output
 	if flagVerbose {
-		fmt.Printf("Request   Count: %d\n", jmxResults[0])
-		fmt.Printf("Error     Count: %d\n", jmxResults[1])
-		fmt.Printf("Processing Time: %d\n", jmxResults[2])
-		fmt.Printf("Current Threads: %d\n", jmxResults[3])
-		fmt.Printf("Max     Threads: %d\n", jmxResults[4])
+		fmt.Printf("Uptime         : %d\n", jmxResults[0])
+		fmt.Printf("Request   Count: %d\n", jmxResults[1])
+		fmt.Printf("Error     Count: %d\n", jmxResults[2])
+		fmt.Printf("Processing Time: %d\n", jmxResults[3])
+		fmt.Printf("Current Threads: %d\n", jmxResults[4])
+		fmt.Printf("Max     Threads: %d\n\n", jmxResults[5])
 	}
 
 	// Make calculations & display results
@@ -154,11 +156,11 @@ func main() {
 			lastRunInfo[2] = 0
 		}
 		jmxTimeElapsed = jmxTime - lastRunInfo[1]
-		newRequests := jmxResults[0] - lastRunInfo[2]
+		newRequests := jmxResults[1] - lastRunInfo[2]
 		rate := float64(newRequests / jmxTimeElapsed)
 		// Update status info
 		lastRunInfo[1] = jmxTime
-		lastRunInfo[2] = jmxResults[0]
+		lastRunInfo[2] = jmxResults[1]
 
 		if flagVerbose {
 			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
@@ -173,11 +175,11 @@ func main() {
 			lastRunInfo[4] = 0
 		}
 		jmxTimeElapsed = jmxTime - lastRunInfo[3]
-		newErrors := jmxResults[1] - lastRunInfo[4]
+		newErrors := jmxResults[2] - lastRunInfo[4]
 		rate := float64(newErrors / jmxTimeElapsed)
 		// Update status info
 		lastRunInfo[3] = jmxTime
-		lastRunInfo[4] = jmxResults[1]
+		lastRunInfo[4] = jmxResults[2]
 
 		if flagVerbose {
 			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
@@ -191,16 +193,16 @@ func main() {
 			lastRunInfo[7] = 0
 			lastRunInfo[6] = 0
 		}
-		newRequests := jmxResults[0] - lastRunInfo[7]
-		newProcTime := jmxResults[2] - lastRunInfo[6]
+		newRequests := jmxResults[1] - lastRunInfo[7]
+		newProcTime := jmxResults[3] - lastRunInfo[6]
 		if newRequests > 0 {
 			latency = int(newProcTime / newRequests)
 		} else {
 			latency = 0.0
 		}
 		// Update status info
-		lastRunInfo[7] = jmxResults[0]
-		lastRunInfo[6] = jmxResults[2]
+		lastRunInfo[7] = jmxResults[1]
+		lastRunInfo[6] = jmxResults[3]
 
 		if flagVerbose {
 			fmt.Printf("New Requests: %d ms\n", newRequests)
@@ -211,7 +213,7 @@ func main() {
 		}
 
 	case "u":                                                       // Does not use saved status info
-		utilization := float64(jmxResults[3] / jmxResults[4] * 100) // Get %
+		utilization := float64(jmxResults[4] / jmxResults[5] * 100) // Get %
 
 		if flagVerbose {
 			fmt.Printf("Utilization: %4.1f%%\n", utilization)
@@ -305,22 +307,34 @@ func getTomcatPID(name string) (int) {
 		v := "pgrep -i -f " + name
 		cmd := exec.Command("sh", "-c", v)
 		stdoutStderr, err := cmd.CombinedOutput()
+		//var ex exec.ExitError
 		if err == nil {
 			pid, err = strconv.Atoi(strings.TrimSpace(string(stdoutStderr))) //Remove trailing newline char (\n)
+			if pid == 0 { // If we got here and have PID = 0, then we got multiple matches
+				fmt.Printf("Found several PIDs for process: %s\n", name)
+				fmt.Println("- This means you have >1 running. pgrep -f must return only one PID.")
+				fmt.Println("- Exiting.")
+				os.Exit(1)
+			}
+			if flagVerbose {
+				fmt.Printf("PID for Process: %s is: %d\n", name, pid)
+			}
 		} else {
-			fmt.Println("error!")
-			log.Fatal(err)
-		}
-		if pid == 0 {
-			fmt.Printf("Cannot find PID for process: %s\n", name)
-			fmt.Println("- This usually means you have 0 or >1 running. pgrep -f must return only one PID.")
-			fmt.Println("- Exiting.")
-			os.Exit(1)
-		}
-		//fmt.Printf("PID: %s \n", string(stdoutStderr))
-		if flagVerbose {
-			fmt.Printf("PID for Process: %s is: %d\n", name, pid)
-		}
+			// Hard to get exit code, from: https://stackoverflow.com/questions/10385551/get-exit-code-go
+			if exiterr, ok := err.(*exec.ExitError); ok {
+				ws := exiterr.Sys().(syscall.WaitStatus)
+				exitCode := ws.ExitStatus()
+				if exitCode == 1 {
+					fmt.Printf("Cannot find PID for process: %s; seems not running or name wrong\n", name)
+					fmt.Println("- pgrep return code = 1")
+					fmt.Println("- Exiting.")
+					os.Exit(1)
+				} else { // Exit code <> 1, pgrep error
+					fmt.Println("error!")
+					log.Fatal(err)
+				}
+			}
+		} // Error == nil
 	}
 
 	return pid
