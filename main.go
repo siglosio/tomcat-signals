@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -35,7 +34,6 @@ var (
 	flagBeginning     bool
 	flagVerbose       bool
 	flagHelp          bool
-	myPID			  int
 )
 
 // init is called automatically at start
@@ -73,7 +71,6 @@ func main() {
 	)
 
 	startTime := time.Now()
-	myPID = os.Getpid() // Needed for pgprep filtering
 
 	if flagVerbose {
 		fmt.Println()
@@ -157,13 +154,13 @@ func main() {
 		}
 		jmxTimeElapsed = jmxUpTime - lastRunInfo[1]
 		newRequests := jmxResults[1] - lastRunInfo[2]
-		rate := float64(newRequests / jmxTimeElapsed)
+		rate := float64(newRequests / jmxTimeElapsed * 1000)
 		// Update status info
 		lastRunInfo[1] = jmxUpTime
 		lastRunInfo[2] = jmxResults[1]
 
 		if flagVerbose {
-			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
+			fmt.Printf("Elapsed Time: %d ms\n", jmxTimeElapsed)
 			fmt.Printf("Rate: %f/sec\n", rate)
 		} else {
 			fmt.Printf("%f", rate)
@@ -176,13 +173,13 @@ func main() {
 		}
 		jmxTimeElapsed = jmxUpTime - lastRunInfo[3]
 		newErrors := jmxResults[2] - lastRunInfo[4]
-		rate := float64(newErrors / jmxTimeElapsed)
+		rate := float64(newErrors / jmxTimeElapsed * 1000)
 		// Update status info
 		lastRunInfo[3] = jmxUpTime
 		lastRunInfo[4] = jmxResults[2]
 
 		if flagVerbose {
-			fmt.Printf("Elapsed Time: %d sec\n", jmxTimeElapsed)
+			fmt.Printf("Elapsed Time: %d ms\n", jmxTimeElapsed)
 			fmt.Printf("Error Rate: %f/sec\n", rate)
 		} else {
 			fmt.Printf("%f", rate)
@@ -205,7 +202,7 @@ func main() {
 		lastRunInfo[6] = jmxResults[3]
 
 		if flagVerbose {
-			fmt.Printf("New Requests: %d ms\n", newRequests)
+			fmt.Printf("New Requests: %d\n", newRequests)
 			fmt.Printf("New Procsssing Time: %d ms\n", newProcTime)
 			fmt.Printf("Latency: %d ms\n", latency)
 		} else {
@@ -277,6 +274,11 @@ func argsCheck(version string, copyright string) {
 	}
 
 	// Require metric type
+	// Require metric type
+	if argStatsMetric == "" {
+		log.Fatalln("Stats Metric missing - should be r, e, l, or u")
+		os.Exit(1)
+	}
 	if argStatsMetric != "r" && argStatsMetric != "e" &&
 		argStatsMetric != "l" && argStatsMetric != "u" {
 		log.Fatalln("Stats Metric not valid - should be r, e, l, or u")
@@ -301,72 +303,47 @@ func checkErr(e error) {
 // Get Tomcat's PID
 func getTomcatPID(name string) (int) {
 	var (
-		pid int
+		pid   int
+		myPid int
 	)
+
+	//OS := runtime.GOOS // If needed later
+	myPid = os.Getpid() // Needed for pgprep filtering
 
 	// If a process, get the PID
 	if argProcessName != "" {
 
 		if flagVerbose {
 			fmt.Printf("Getting PID for Process: %s\n", name)
-			fmt.Printf("Note my PID is: %d\n", myPID)
+			fmt.Printf("Note my PID is: %d\n", myPid)
 		}
 
 		// Realy need to check/safe this argument going to the OS
 		// Note -i is okay on Mac, but not on Linux for pgrep, so we are case SENSITIVE
-		v := "pgrep -f " + name
+		//v := "pgrep -f " + name
+
+		v := "ps -A -o pid,comm,args | grep java | grep " + name +
+			" | grep -v grep | awk '{print $1}'"
+
 		cmd := exec.Command("sh", "-c", v)
 		stdoutStderr, err := cmd.CombinedOutput()
-
-		//var ex exec.ExitError
 		if err == nil {
-			// Very messy but we have to filter out our own PID at runtime, then check for 0, 1, or more
-			pids := strings.Split(string(stdoutStderr), "\n")
-			pid = -1 // Not set, needed below so we know if it's been set, even to 0
-			for _, element := range pids {
-				if element != fmt.Sprintf("%d", myPID) &&
-					len(element) > 0 { // Not our PID
-					if pid == -1 { // PID not set yet, so set try to set it
-						pid, err = strconv.Atoi(strings.TrimSpace(string(element))) //Remove trailing newline char (\n)
-					} else {
-						// PID Already set, so we have > 1 PID here that's not us
-						pid = 0 // Set 0 so logic below sees this and gives error to use; may clean up logic later
-					}
-				}
-			}
+			pid, err = strconv.Atoi(strings.TrimSpace(string(stdoutStderr))) //Remove trailing newline char (\n)
 			if pid == 0 { // If we got here and have PID = 0, then we got multiple matches
-				fmt.Printf("Found several PIDs for process: %s\n", name)
-				fmt.Println("- This means you have >1 running. pgrep -f must return only one PID.")
-				fmt.Printf("pgrep returned:\n%s\n", string(stdoutStderr))
+				fmt.Printf("Found 0 or Several PIDs for process: %s\n", name)
+				fmt.Println("- This means you have 0 or >1 running. following command must return only one PID.")
+				fmt.Printf("   %s:\n%s\n", v, string(stdoutStderr))
 				fmt.Println("- Exiting.")
 				os.Exit(1)
-			} else {
-				// Sames as below if pgrep returns nothing; we get here because pgrep returned only us
-				fmt.Printf("Cannot find PID for process: %s; seems not running or name is wrong\n", name)
-				fmt.Println("- pgrep return code = 1")
-				fmt.Println("- Exiting.")
-				os.Exit(1)
-				}
+			}
 			if flagVerbose {
 				fmt.Printf("PID for Process: %s is: %d\n", name, pid)
 			}
 		} else {
-			// Hard to get exit code, from: https://stackoverflow.com/questions/10385551/get-exit-code-go
-			if exiterr, ok := err.(*exec.ExitError); ok {
-				ws := exiterr.Sys().(syscall.WaitStatus)
-				exitCode := ws.ExitStatus()
-				if exitCode == 1 {
-					fmt.Printf("Cannot find PID for process: %s; seems not running or name is wrong\n", name)
-					fmt.Println("- pgrep return code = 1")
-					fmt.Println("- Exiting.")
-					os.Exit(1)
-				} else { // Exit code <> 1, pgrep error
-					fmt.Println("error!")
-					log.Fatal(err)
-				}
-			}
-		} // Error == nil
-	}
+			fmt.Println("Error in exec call to ps, grep, and awk.")
+			log.Fatal(err)
+		}
+	} // Arg name not blank
 
 	return pid
 } // getTomcatPID
