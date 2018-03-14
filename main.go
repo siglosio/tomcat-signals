@@ -50,7 +50,7 @@ func init() {
 	//flag.StringVarP(&argServerPort, "port", "P", "3306", "Server Port")
 	//flag.StringVarP(&argServerUser, "user", "u", "", "User")
 	//flag.StringVarP(&argServerPassword, "password", "w", "", "Password")
-	flag.StringVarP(&argStatsMetric, "metric", "m", "r", "Metric Type")
+	flag.StringVarP(&argStatsMetric, "metric", "m", "r", "Metric Type, r - rate, l - latency, u - utilization, e - errors")
 	flag.StringVarP(&argStatusFileName, "statusfile", "f", "", "Status File")
 	flag.StringVarP(&argCredFileName, "credfile", "c", "", "Credential File")
 	flag.BoolVarP(&flagBeginning, "beginning", "b", false, "From Beginning")
