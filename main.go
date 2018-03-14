@@ -59,7 +59,7 @@ func init() {
 	flag.BoolVarP(&flagHelp, "help", "h", false, "Help")
 	flag.StringVarP(&flagJMXTerm, "jmxterm", "j", "jmxterm-1.0.0-uber.jar", "path to jmxterm")
 	flag.StringVar(&flagJMXinputFile, "jmxinputfile", "jmx.input", "temp file to store input to jmxterm")
-	flag.StringVar(&flagJMXoutputFile, "jmxoutputfile", "jmx.output", "temp file to store output to jmxterm")
+	flag.StringVar(&flagJMXoutputFile, "jmxoutputfile", "jmx.output", "temp file to store output of jmxterm")
 
 	flag.Parse() // Process argurments
 }
