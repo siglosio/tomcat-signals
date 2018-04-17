@@ -28,7 +28,7 @@ import (
 
 // Run JMX
 
-func runJMX(pid int) ([6]int, error) {
+func runJMX(pid int, JMXTerm, inputFile, outputFile string) ([6]int, error) {
 	var (
 		vals [6]int
 	)
@@ -48,7 +48,6 @@ func runJMX(pid int) ([6]int, error) {
 	jmxCommandThdMax := "get maxThreads\n"
 
 	// Now write input file with PID in it
-	inputFile := "jmx.input"
 	fw, err := os.Create(inputFile)
 	checkErr(err)
 	// JMX tool commands, one per line
@@ -71,11 +70,12 @@ func runJMX(pid int) ([6]int, error) {
 	fw.Close()
 
 	// Delete output file so no old stuff lying around
-	outputFile := "jmx.output"
 	os.Remove(outputFile) // Not checking output, don't care
 
 	// Build up command; have to use 'sh' to run due to arg issues
-	v := "java -jar jmxterm-1.0.0-uber.jar -n -e -i jmx.input -o jmx.output"
+	v := "java -jar"
+	v = strings.Join([]string{v, JMXTerm}, " ")
+	v = strings.Join([]string{v, "-n -e -i", inputFile, "-o", outputFile}, " ")
 	cmd := exec.Command("sh", "-c", v)
 	if flagVerbose {
 		fmt.Printf("Starting JMX run ... with: %s %s\n\n", cmd.Path, cmd.Args)
@@ -100,7 +100,9 @@ func runJMX(pid int) ([6]int, error) {
 		checkErr(err)
 		s := scanner.Text()
 		if len(s) > 0 { // Skip blank lines
-			fmt.Printf("Scan text: %s\n", s)
+			if flagVerbose {
+				fmt.Printf("Scan text: %s\n", s)
+			}
 			s = strings.TrimRight(s, ";") // Remove trailing semicolon
 			// Get the last value
 			fields := strings.Fields(s) // Split on spaces

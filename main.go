@@ -5,13 +5,14 @@ package main
 
 import (
 	"fmt"
-	flag "github.com/ogier/pflag"
 	"log"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	flag "github.com/ogier/pflag"
 )
 
 // constants
@@ -34,6 +35,9 @@ var (
 	flagBeginning     bool
 	flagVerbose       bool
 	flagHelp          bool
+	flagJMXTerm       string
+	flagJMXinputFile  string
+	flagJMXoutputFile string
 )
 
 // init is called automatically at start
@@ -46,13 +50,16 @@ func init() {
 	//flag.StringVarP(&argServerPort, "port", "P", "3306", "Server Port")
 	//flag.StringVarP(&argServerUser, "user", "u", "", "User")
 	//flag.StringVarP(&argServerPassword, "password", "w", "", "Password")
-	flag.StringVarP(&argStatsMetric, "metric", "m", "c", "Metric Type")
+	flag.StringVarP(&argStatsMetric, "metric", "m", "r", "Metric Type, r - rate, l - latency, u - utilization, e - errors")
 	flag.StringVarP(&argStatusFileName, "statusfile", "f", "", "Status File")
 	flag.StringVarP(&argCredFileName, "credfile", "c", "", "Credential File")
 	flag.BoolVarP(&flagBeginning, "beginning", "b", false, "From Beginning")
 	flag.BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose Output")
 	//flag.BoolVarP(&flagVeryVerbose, "very-verbose", "w", false, "Very Verbose Output")
 	flag.BoolVarP(&flagHelp, "help", "h", false, "Help")
+	flag.StringVarP(&flagJMXTerm, "jmxterm", "j", "jmxterm-1.0.0-uber.jar", "path to jmxterm")
+	flag.StringVar(&flagJMXinputFile, "jmxinputfile", "jmx.input", "temp file to store input to jmxterm")
+	flag.StringVar(&flagJMXoutputFile, "jmxoutputfile", "jmx.output", "temp file to store output of jmxterm")
 
 	flag.Parse() // Process argurments
 }
@@ -123,7 +130,7 @@ func main() {
 		}
 	}
 
-	jmxResults, err = runJMX(pid)
+	jmxResults, err = runJMX(pid, flagJMXTerm, flagJMXinputFile, flagJMXoutputFile)
 	checkErr(err)
 	// jmxReults[]:
 	// 0 - Uptime
@@ -160,8 +167,12 @@ func main() {
 		lastRunInfo[2] = jmxResults[1]
 
 		if flagVerbose {
+			fmt.Printf("newRequests: %d\n", newRequests)
 			fmt.Printf("Elapsed Time: %d ms\n", jmxTimeElapsed)
 			fmt.Printf("Rate: %f/sec\n", rate)
+			fmt.Printf("\nStatus File values\n")
+			fmt.Printf("Uptime         : %d\n", lastRunInfo[1])
+			fmt.Printf("Request   Count: %d\n", lastRunInfo[2])
 		} else {
 			fmt.Printf("%f", rate)
 		}
@@ -209,7 +220,7 @@ func main() {
 			fmt.Printf("%d", latency)
 		}
 
-	case "u":                                                       // Does not use saved status info
+	case "u": // Does not use saved status info
 		utilization := float64(jmxResults[4] / jmxResults[5] * 100) // Get %
 
 		if flagVerbose {
@@ -301,7 +312,7 @@ func checkErr(e error) {
 }
 
 // Get Tomcat's PID
-func getTomcatPID(name string) (int) {
+func getTomcatPID(name string) int {
 	var (
 		pid   int
 		myPid int
@@ -329,7 +340,7 @@ func getTomcatPID(name string) (int) {
 		stdoutStderr, err := cmd.CombinedOutput()
 		if err == nil {
 			pid, err = strconv.Atoi(strings.TrimSpace(string(stdoutStderr))) //Remove trailing newline char (\n)
-			if pid == 0 { // If we got here and have PID = 0, then we got multiple matches
+			if pid == 0 {                                                    // If we got here and have PID = 0, then we got multiple matches
 				fmt.Printf("Found 0 or Several PIDs for process: %s\n", name)
 				fmt.Println("- This means you have 0 or >1 running. following command must return only one PID.")
 				fmt.Printf("   %s:\n%s\n", v, string(stdoutStderr))
